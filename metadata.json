@@ -1,0 +1,5 @@
+
+{
+  "name": "Form Builder Performance POC",
+  "description": "A proof-of-concept application to analyze the performance of client-side rendering for a large, JSON-configured form, addressing questions about storage and rendering strategies for form builders."
+}
