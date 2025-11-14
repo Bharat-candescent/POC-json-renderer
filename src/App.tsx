@@ -1,75 +1,119 @@
-import React, { useState, useLayoutEffect, useRef, useCallback } from 'react';
+
+
+import React, { useState, useLayoutEffect, useRef, useCallback, useMemo, Profiler } from 'react';
 import { FormFieldConfig } from './types';
 import { FORM_CONFIG } from './constants';
 import FormRenderer from './components/FormRenderer';
-import { InfoIcon, CpuChipIcon, ServerIcon, DatabaseIcon, BeakerIcon, DocumentTextIcon, CodeBracketIcon, BoltIcon } from './components/icons/Icons';
+import { InfoIcon, CpuChipIcon, ServerIcon, DatabaseIcon, BeakerIcon, DocumentTextIcon, CodeBracketIcon, BoltIcon, AdjustmentsHorizontalIcon } from './components/icons/Icons';
 
 // Create a larger master config by duplicating the base config to test scalability.
-const MASTER_FORM_CONFIG: FormFieldConfig[] = Array.from({ length: 4 }).flatMap((_, i) => 
-    FORM_CONFIG.map((field, j) => ({
-        ...field,
-        name: `${field.name}_${i}`, // Ensure unique name attribute for form elements
-        label: `${field.label}${i > 0 ? ` (Copy ${i + 1})` : ''}`,
-        rowIndex: i * FORM_CONFIG.length + j,
-    }))
-);
+const MASTER_FORM_CONFIG: FormFieldConfig[] = Array.from({ length: 4 }).flatMap((_, i) => {
+    const suffix = `_${i}`;
+    const originalNames = FORM_CONFIG.map(f => f.name);
 
+    return FORM_CONFIG.map((field, j) => {
+        const newName = `${field.name}${suffix}`;
+        
+        // Deep copy the field to avoid modifying the original FORM_CONFIG
+        const newField = JSON.parse(JSON.stringify(field));
+        
+        newField.name = newName;
+        newField.label = `${field.label}${i > 0 ? ` (Copy ${i + 1})` : ''}`;
+        newField.rowIndex = i * FORM_CONFIG.length + j;
+
+        // FIX: Moved updateConditions function to a higher scope to be accessible by multiple blocks.
+        const updateConditions = (conditions: any) => {
+            if (Array.isArray(conditions)) {
+                conditions.forEach(cond => {
+                    if (cond.field && originalNames.includes(cond.field)) {
+                        cond.field = `${cond.field}${suffix}`;
+                    }
+                    // Recurse for nested compound conditions
+                    if (cond.AND) updateConditions(cond.AND);
+                    if (cond.OR) updateConditions(cond.OR);
+                });
+            }
+        };
+
+        // IMPORTANT: Update conditions to reference the new, unique field names within the same duplicated block
+        if (newField.conditions) {
+            updateConditions(newField.conditions);
+        }
+         // Update dynamic property rules
+        if (newField.dynamicProps) {
+            newField.dynamicProps.forEach((rule: any) => {
+                updateConditions(rule.conditions);
+            });
+        }
+        // Update options source
+        if (newField.optionsSource?.field && originalNames.includes(newField.optionsSource.field)) {
+            newField.optionsSource.field = `${newField.optionsSource.field}${suffix}`;
+        }
+        
+        return newField;
+    });
+});
 
 const App: React.FC = () => {
   const [formConfig, setFormConfig] = useState<FormFieldConfig[] | null>(null);
-  const [renderTime, setRenderTime] = useState<number | null>(null);
-  const [initialLoadTime, setInitialLoadTime] = useState<number | null>(null);
-  const [fieldCount, setFieldCount] = useState<number>(25);
+  const [wallClockTime, setWallClockTime] = useState<number | null>(null);
+  const [reactRenderDuration, setReactRenderDuration] = useState<number | null>(null);
+
+  const [fieldCount, setFieldCount] = useState<number>(FORM_CONFIG.length);
   const [activeTab, setActiveTab] = useState<'form' | 'json'>('form');
   const [jsonForDisplay, setJsonForDisplay] = useState<string>('');
   
-  const renderStartTimeRef = useRef<number>(0);
-  const initialLoadStartTimeRef = useRef<number>(0);
+  // State for global form controls
+  const allVariants = useMemo(() => Array.from(new Set(MASTER_FORM_CONFIG.map(f => f.variant))).sort(), []);
+  const initialVisibility = useMemo(() => allVariants.reduce((acc, v) => ({ ...acc, [v]: true }), {}), [allVariants]);
+  
+  const [fieldVisibility, setFieldVisibility] = useState<Record<string, boolean>>(initialVisibility);
+  const [allRequired, setAllRequired] = useState<boolean>(false);
+  const [inputsDisabled, setInputsDisabled] = useState<boolean>(false);
+  const [simulateHeavy, setSimulateHeavy] = useState<boolean>(false);
 
-  const handleRenderTest = useCallback(() => {
-    setFormConfig(null);
-    setRenderTime(null);
-    setInitialLoadTime(null);
+  const startTimeRef = useRef<number>(0);
+
+  const runTest = useCallback((config: FormFieldConfig[]) => {
+    setFormConfig(null); // Clear previous form
+    setWallClockTime(null);
+    setReactRenderDuration(null);
     setActiveTab('form');
-    // Give React a moment to clear the old form
+    
     setTimeout(() => {
-      const configToRender = MASTER_FORM_CONFIG.slice(0, fieldCount);
-      setJsonForDisplay(JSON.stringify(configToRender, null, 2));
-      
-      renderStartTimeRef.current = performance.now();
-      setFormConfig(configToRender);
-    }, 50);
-  }, [fieldCount]);
-
-  const handleInitialLoadTest = useCallback(() => {
-    setFormConfig(null);
-    setRenderTime(null);
-    setInitialLoadTime(null);
-    setActiveTab('form');
-    setFieldCount(MASTER_FORM_CONFIG.length);
-     // Give React a moment to clear the old form
-    setTimeout(() => {
-      const configToRender = MASTER_FORM_CONFIG;
-      setJsonForDisplay(JSON.stringify(configToRender, null, 2));
-
-      initialLoadStartTimeRef.current = performance.now();
-      setFormConfig(configToRender);
+      setJsonForDisplay(JSON.stringify(config, null, 2));
+      startTimeRef.current = performance.now();
+      setFormConfig(config); // Trigger render
     }, 50);
   }, []);
 
+  const handleRenderTest = useCallback(() => {
+    const configToRender = MASTER_FORM_CONFIG.slice(0, fieldCount);
+    runTest(configToRender);
+  }, [fieldCount, runTest]);
+
+  const handleInitialLoadTest = useCallback(() => {
+    runTest(MASTER_FORM_CONFIG);
+  }, [runTest]);
+
   useLayoutEffect(() => {
-    if (formConfig) {
+    if (formConfig && startTimeRef.current) {
       const endTime = performance.now();
-      if (renderStartTimeRef.current) {
-        setRenderTime(endTime - renderStartTimeRef.current);
-        renderStartTimeRef.current = 0;
-      }
-      if (initialLoadStartTimeRef.current) {
-        setInitialLoadTime(endTime - initialLoadStartTimeRef.current);
-        initialLoadStartTimeRef.current = 0;
-      }
+      setWallClockTime(endTime - startTimeRef.current);
+      // Reset ref, profiler will handle the react time
+      startTimeRef.current = 0;
     }
   }, [formConfig]);
+
+  const onRender = useCallback((id: string, phase: string, actualDuration: number) => {
+    if (phase === 'mount' && formConfig) {
+      setReactRenderDuration(actualDuration);
+    }
+  }, [formConfig]);
+
+  const handleVisibilityChange = (variant: string) => {
+    setFieldVisibility(prev => ({ ...prev, [variant]: !prev[variant] }));
+  };
 
   const TabButton: React.FC<{
     tabName: 'form' | 'json';
@@ -98,8 +142,8 @@ const App: React.FC = () => {
           <h1 className="text-4xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-cyan-400 mb-2">
             Form Builder Performance POC
           </h1>
-          <p className="text-lg text-gray-400">
-            Answering key architectural questions for dynamic, JSON-driven forms.
+          <p className="text-lg text-gray-400 max-w-3xl mx-auto">
+            A proof-of-concept for analyzing client-side rendering of complex, JSON-driven forms with advanced conditional logic.
           </p>
         </header>
 
@@ -107,35 +151,28 @@ const App: React.FC = () => {
           <div className="bg-gray-800/50 p-6 rounded-xl border border-gray-700 shadow-lg">
             <h2 className="text-2xl font-bold mb-4 text-cyan-300 flex items-center">
               <InfoIcon className="w-6 h-6 mr-3" />
-              POC Analysis
+              Key Architectural Decisions
             </h2>
 
-            <div className="space-y-6">
+            <div className="space-y-4">
                <div className="p-4 bg-gray-900/70 rounded-lg border border-gray-700">
-                <h3 className="font-semibold text-lg mb-2 flex items-center"><DatabaseIcon className="w-5 h-5 mr-2 text-purple-400"/>1. Store JSON Config, Not Rendered HTML</h3>
-                <p className="text-gray-400">
-                  Storing the JSON configuration is vastly superior. It offers flexibility, supports multiple UIs, is more compact, and allows for easier validation and versioning.
+                <h3 className="font-semibold text-lg mb-1 flex items-center"><DatabaseIcon className="w-5 h-5 mr-2 text-purple-400"/>1. Store JSON Config, Not Rendered HTML</h3>
+                <p className="text-gray-400 text-sm">
+                  Storing JSON is superior for flexibility, versioning, and supporting multiple UIs from a single source of truth.
                 </p>
               </div>
 
                <div className="p-4 bg-gray-900/70 rounded-lg border border-gray-700">
-                 <h3 className="font-semibold text-lg mb-2 flex items-center"><ServerIcon className="w-5 h-5 mr-2 text-purple-400"/>2. Render on the Client-Side (CSR)</h3>
-                <p className="text-gray-400">
-                  Client-side rendering is ideal for dynamic forms. It leverages the user's device, reducing server load and enabling a snappy, interactive experience after the initial load.
+                 <h3 className="font-semibold text-lg mb-1 flex items-center"><ServerIcon className="w-5 h-5 mr-2 text-purple-400"/>2. Render on the Client-Side (CSR)</h3>
+                <p className="text-gray-400 text-sm">
+                  Ideal for dynamic forms. CSR leverages the user's device, enabling a rich, interactive experience with minimal server load.
                 </p>
               </div>
 
               <div className="p-4 bg-gray-900/70 rounded-lg border border-gray-700">
-                <h3 className="font-semibold text-lg mb-2 flex items-center"><CpuChipIcon className="w-5 h-5 mr-2 text-purple-400"/>3. Performance Test on Old Devices</h3>
-                <p className="text-gray-400">
-                  The primary concern with CSR is performance on older devices. This test measures the time taken to render a large form from its JSON configuration, simulating the load on a client device.
-                </p>
-              </div>
-
-              <div className="p-4 bg-gray-900/70 rounded-lg border border-gray-700">
-                <h3 className="font-semibold text-lg mb-2 flex items-center"><BoltIcon className="w-5 h-5 mr-2 text-purple-400"/>4. End-to-End Loading Simulation</h3>
-                <p className="text-gray-400">
-                  The JSON now includes field options (e.g., for dropdowns), simulating a full config from a backend. The "Initial Load Test" is perfect for use with Vite and Lighthouse to measure total load time, including bundle size and parsing.
+                <h3 className="font-semibold text-lg mb-1 flex items-center"><CpuChipIcon className="w-5 h-5 mr-2 text-purple-400"/>3. The Performance Question</h3>
+                <p className="text-gray-400 text-sm">
+                  The primary concern with CSR is performance. This test measures render times, especially with complex dependencies and computationally "heavy" components, to simulate real-world stress.
                 </p>
               </div>
             </div>
@@ -146,9 +183,14 @@ const App: React.FC = () => {
                 Live Performance Test
               </h3>
               <div className="space-y-6 p-4 bg-gray-900/70 rounded-lg border border-gray-700">
+                 <div className="flex items-center justify-between p-3 bg-gray-800 rounded-md">
+                    <label htmlFor="simulateHeavy" className="text-sm font-medium text-gray-300">Simulate "Heavy" Components</label>
+                    <input type="checkbox" id="simulateHeavy" className="toggle-switch" checked={simulateHeavy} onChange={() => setSimulateHeavy(!simulateHeavy)} />
+                </div>
+                
                 <div>
                   <label htmlFor="field-count" className="block text-sm font-medium text-gray-300 mb-2">
-                    Number of Fields to Render: <span className="font-bold text-white">{fieldCount}</span>
+                    Fields to Render: <span className="font-bold text-white">{fieldCount}</span>
                   </label>
                   <input
                     id="field-count"
@@ -161,47 +203,46 @@ const App: React.FC = () => {
                     aria-label="Number of fields to render"
                   />
                 </div>
-                <button
-                  onClick={handleRenderTest}
-                  className="w-full bg-gradient-to-r from-purple-600 to-cyan-500 text-white font-bold py-3 px-8 rounded-lg text-lg hover:from-purple-700 hover:to-cyan-600 focus:outline-none focus:ring-4 focus:ring-cyan-300/50 transform transition-all hover:scale-[1.02]"
-                >
-                  Run Dynamic Render Test
-                </button>
-                {renderTime !== null && (
-                  <div className="p-4 bg-green-900/50 border border-green-500 rounded-lg animate-fade-in">
-                    <p className="text-sm text-green-300">Time to render {formConfig?.length} fields:</p>
-                    <p className="text-4xl font-bold text-green-200">
-                      {renderTime.toFixed(2)} ms
-                    </p>
-                    <p className="text-xs text-gray-400 mt-1">Measures dynamic updates based on the slider.</p>
-                  </div>
-                )}
                 
-                <div className="border-t border-gray-700 my-4"></div>
-
-                <div className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <button
+                      onClick={handleRenderTest}
+                      className="w-full bg-gradient-to-r from-purple-600 to-cyan-500 text-white font-bold py-3 px-4 rounded-lg text-base hover:from-purple-700 hover:to-cyan-600 focus:outline-none focus:ring-4 focus:ring-cyan-300/50 transform transition-all hover:scale-[1.02]"
+                    >
+                      Run Dynamic Test
+                    </button>
                     <button
                         onClick={handleInitialLoadTest}
-                        className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-gray-700 to-gray-600 text-white font-bold py-3 px-8 rounded-lg hover:from-gray-600 hover:to-gray-500 focus:outline-none focus:ring-4 focus:ring-gray-500/50 transform transition-all hover:scale-[1.02]"
+                        className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-gray-700 to-gray-600 text-white font-bold py-3 px-4 rounded-lg hover:from-gray-600 hover:to-gray-500 focus:outline-none focus:ring-4 focus:ring-gray-500/50 transform transition-all hover:scale-[1.02]"
                     >
                         <BoltIcon className="w-5 h-5"/>
-                        Run Initial Load Test ({MASTER_FORM_CONFIG.length} Fields)
+                        Run Full Load Test
                     </button>
-                    {initialLoadTime !== null && (
-                        <div className="p-4 bg-sky-900/50 border border-sky-500 rounded-lg animate-fade-in">
-                            <p className="text-sm text-sky-300">Time for full initial load ({MASTER_FORM_CONFIG.length} fields):</p>
-                            <p className="text-4xl font-bold text-sky-200">
-                            {initialLoadTime.toFixed(2)} ms
-                            </p>
-                            <p className="text-xs text-gray-400 mt-1">Simulates fetching and rendering the entire form.</p>
-                        </div>
-                    )}
                 </div>
+                
+                {(wallClockTime !== null || reactRenderDuration !== null) && (
+                  <div className="p-4 bg-gray-900/80 border border-gray-700 rounded-lg animate-fade-in grid grid-cols-1 sm:grid-cols-2 gap-4 text-center">
+                    <div>
+                        <p className="text-sm text-green-300">Wall Clock Time</p>
+                        <p className="text-3xl font-bold text-green-200">
+                          {wallClockTime?.toFixed(2) ?? '...'} ms
+                        </p>
+                        <p className="text-xs text-gray-400 mt-1">Total time from click to paint.</p>
+                    </div>
+                     <div>
+                        <p className="text-sm text-sky-300">React Render Duration</p>
+                        <p className="text-3xl font-bold text-sky-200">
+                         {reactRenderDuration?.toFixed(2) ?? '...'} ms
+                        </p>
+                         <p className="text-xs text-gray-400 mt-1">Time spent in React's render phase.</p>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
           
-          <div className="bg-gray-800/50 rounded-xl border border-gray-700 shadow-lg flex flex-col">
+          <div className="bg-gray-800/50 rounded-xl border border-gray-700 shadow-lg flex flex-col min-h-0">
             <div className="flex border-b border-gray-700 flex-shrink-0">
                 <TabButton tabName="form" label="Rendered Form" count={formConfig ? formConfig.length : 0}>
                     <DocumentTextIcon className="w-5 h-5 mr-2" />
@@ -210,31 +251,119 @@ const App: React.FC = () => {
                     <CodeBracketIcon className="w-5 h-5 mr-2" />
                 </TabButton>
             </div>
-            <div className="p-6 overflow-y-auto h-full min-h-[400px]">
-                {activeTab === 'form' && (
-                    formConfig ? (
-                        <FormRenderer config={formConfig} />
-                    ) : (
-                        <div className="flex items-center justify-center h-full text-gray-500">
-                            <p>Use the controls to run a render test.</p>
-                        </div>
-                    )
-                )}
-                {activeTab === 'json' && (
-                     jsonForDisplay ? (
-                        <pre className="text-xs bg-gray-900 p-4 rounded-md text-cyan-200 overflow-x-auto">
-                            <code>{jsonForDisplay}</code>
-                        </pre>
-                    ) : (
-                        <div className="flex items-center justify-center h-full text-gray-500">
-                            <p>Run a test to see the generated JSON configuration.</p>
-                        </div>
-                    )
-                )}
+
+            <div className="p-6 overflow-hidden flex flex-col flex-grow">
+              {activeTab === 'form' && formConfig && (
+                <div className="mb-6 p-4 bg-gray-900/70 rounded-lg border border-gray-700 flex-shrink-0">
+                  <h3 className="text-lg font-bold text-cyan-300 mb-4 flex items-center">
+                    <AdjustmentsHorizontalIcon className="w-6 h-6 mr-3" />
+                    Global Form Controls
+                  </h3>
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="flex items-center justify-between p-3 bg-gray-800 rounded-md">
+                        <label htmlFor="allRequired" className="text-sm font-medium text-gray-300">Make all required</label>
+                        <input type="checkbox" id="allRequired" className="toggle-switch" checked={allRequired} onChange={() => setAllRequired(!allRequired)} />
+                      </div>
+                       <div className="flex items-center justify-between p-3 bg-gray-800 rounded-md">
+                        <label htmlFor="inputsDisabled" className="text-sm font-medium text-gray-300">Disable all inputs</label>
+                        <input type="checkbox" id="inputsDisabled" className="toggle-switch" checked={inputsDisabled} onChange={() => setInputsDisabled(!inputsDisabled)} />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-300 mb-2 block">Toggle Field Visibility:</label>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                        {allVariants.map(variant => (
+                          <div key={variant} className="flex items-center">
+                            <input
+                              id={`vis-${variant}`}
+                              type="checkbox"
+                              checked={fieldVisibility[variant]}
+                              onChange={() => handleVisibilityChange(variant)}
+                              className="h-4 w-4 rounded border-gray-500 bg-gray-700 text-cyan-600 focus:ring-cyan-500"
+                            />
+                            <label htmlFor={`vis-${variant}`} className="ml-2 text-sm text-gray-400">{variant}</label>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              <div className="overflow-y-auto flex-grow min-h-0">
+                  {activeTab === 'form' && (
+                      formConfig ? (
+                          <Profiler id="FormRenderer" onRender={onRender}>
+                              <FormRenderer 
+                                config={formConfig}
+                                fieldVisibility={fieldVisibility}
+                                allRequired={allRequired}
+                                inputsDisabled={inputsDisabled}
+                                simulateHeavy={simulateHeavy}
+                              />
+                          </Profiler>
+                      ) : (
+                          <div className="flex items-center justify-center h-full text-gray-500">
+                              <p>Use the controls to run a render test.</p>
+                          </div>
+                      )
+                  )}
+                  {activeTab === 'json' && (
+                       jsonForDisplay ? (
+                          <pre className="text-xs bg-gray-900 p-4 rounded-md text-cyan-200 overflow-x-auto">
+                              <code>{jsonForDisplay}</code>
+                          </pre>
+                      ) : (
+                          <div className="flex items-center justify-center h-full text-gray-500">
+                              <p>Run a test to see the generated JSON configuration.</p>
+                          </div>
+                      )
+                  )}
+              </div>
             </div>
           </div>
         </div>
       </div>
+       <style>{`
+          .toggle-switch {
+              height: 1.5rem;
+              width: 2.75rem;
+              position: relative;
+              display: inline-block;
+              -webkit-appearance: none;
+              -moz-appearance: none;
+              appearance: none;
+              background-color: #4b5563;
+              border-radius: 9999px;
+              cursor: pointer;
+              transition: background-color 0.2s ease-in-out;
+          }
+          .toggle-switch::before {
+              content: '';
+              position: absolute;
+              top: 0.25rem;
+              left: 0.25rem;
+              height: 1rem;
+              width: 1rem;
+              background-color: white;
+              border-radius: 9999px;
+              transition: transform 0.2s ease-in-out;
+          }
+          .toggle-switch:checked {
+              background-color: #0891b2;
+          }
+          .toggle-switch:checked::before {
+              transform: translateX(1.25rem);
+          }
+          .animate-spin {
+            animation: spin 1s linear infinite;
+          }
+          @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+          }
+      `}</style>
     </main>
   );
 };

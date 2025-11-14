@@ -1,20 +1,95 @@
-import React from 'react';
+
+import React, { useEffect, useState, useRef } from 'react';
 import { FormFieldConfig } from '../types';
-import { ChevronDownIcon, CalendarIcon, UploadIcon, LockClosedIcon, StarIcon, SignatureIcon } from './icons/Icons';
+import { ChevronDownIcon, CalendarIcon, UploadIcon, LockClosedIcon, StarIcon, SignatureIcon, SpinnerIcon, CheckCircleIcon, XCircleIcon } from './icons/Icons';
 
 interface FormFieldProps {
   field: FormFieldConfig;
+  value: any;
+  onFieldChange: (name: string, value: any) => void;
+  simulateHeavy?: boolean;
 }
 
-const FormField: React.FC<FormFieldProps> = ({ field }) => {
+// Simulate an API call to check username uniqueness
+const takenUsernames = ['admin', 'root', 'testuser', 'john.doe_1'];
+const checkUsernameApi = (username: string): Promise<boolean> => {
+    console.log(`Checking username: ${username}`);
+    return new Promise(resolve => {
+        setTimeout(() => {
+            resolve(!takenUsernames.includes(username.toLowerCase()));
+        }, 1000); // Simulate 1s network latency
+    });
+};
+
+const FormField: React.FC<FormFieldProps> = ({ field, value, onFieldChange, simulateHeavy }) => {
   // State for the "Other" checkbox, only used if the variant is CheckboxGroup with hasOtherOption
   const [isOtherChecked, setIsOtherChecked] = React.useState(false);
+
+  // --- Internal State for Asynchronous Validation ---
+  type ValidationState = 'idle' | 'loading' | 'valid' | 'invalid';
+  const [validationState, setValidationState] = useState<ValidationState>('idle');
+  const [validationMessage, setValidationMessage] = useState<string | null>(null);
+  const debounceTimeoutRef = useRef<number | null>(null);
+
+  const hasUniqueValidation = field.validationRules?.some(rule => rule.type === 'unique');
+
+  useEffect(() => {
+    if (!hasUniqueValidation || value === '') {
+      setValidationState('idle');
+      if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
+      return;
+    }
+
+    // Debounce the API call
+    if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
+    
+    setValidationState('loading');
+    
+    debounceTimeoutRef.current = window.setTimeout(() => {
+      checkUsernameApi(value).then(isAvailable => {
+        if (isAvailable) {
+          setValidationState('valid');
+          setValidationMessage(null);
+        } else {
+          setValidationState('invalid');
+          const rule = field.validationRules?.find(r => r.type === 'unique');
+          setValidationMessage(rule?.message || 'This value is already taken.');
+        }
+      });
+    }, 500); // 500ms debounce delay
+
+    // Cleanup on unmount or value change
+    return () => {
+      if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
+    };
+
+  }, [value, hasUniqueValidation, field.validationRules]);
+
+
+  // Simulate a computationally heavy component for performance testing
+  if (simulateHeavy && field.isComplex) {
+    const startTime = performance.now();
+    while (performance.now() - startTime < 5) {
+      // This is a synchronous, blocking operation to simulate a slow render.
+    }
+  }
 
   const renderActualField = () => {
     const commonInputClass = "mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md shadow-sm py-2 px-3 text-gray-200 placeholder-gray-400 focus:outline-none focus:ring-cyan-500 focus:border-cyan-500 sm:text-sm";
     const disabledClass = "disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed";
 
     switch (field.variant) {
+      case 'Input':
+        return (
+             <div className="relative">
+                <input type="text" name={field.name} id={field.name} className={`${commonInputClass} ${disabledClass}`} placeholder={field.placeholder} disabled={field.disabled} value={value || ''} onChange={(e) => onFieldChange(field.name, e.target.value)} />
+                <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                    {validationState === 'loading' && <SpinnerIcon className="h-5 w-5 text-gray-400 animate-spin" />}
+                    {validationState === 'valid' && <CheckCircleIcon className="h-5 w-5 text-green-500" />}
+                    {validationState === 'invalid' && <XCircleIcon className="h-5 w-5 text-red-500" />}
+                </div>
+            </div>
+        );
       case 'Checkbox':
         return (
           <div className="flex items-start mt-2">
@@ -23,7 +98,8 @@ const FormField: React.FC<FormFieldProps> = ({ field }) => {
                 id={field.name}
                 name={field.name}
                 type="checkbox"
-                defaultChecked={field.checked}
+                checked={!!value}
+                onChange={(e) => onFieldChange(field.name, e.target.checked)}
                 disabled={field.disabled}
                 className="focus:ring-cyan-500 h-4 w-4 text-cyan-600 border-gray-600 rounded bg-gray-700 disabled:cursor-not-allowed"
               />
@@ -48,18 +124,24 @@ const FormField: React.FC<FormFieldProps> = ({ field }) => {
               <p className="text-gray-400 text-sm">{field.description}</p>
             </div>
             <label htmlFor={field.name} className="inline-flex relative items-center cursor-pointer">
-              <input type="checkbox" id={field.name} className="sr-only peer" defaultChecked={field.checked} disabled={field.disabled} />
+              <input 
+                type="checkbox" 
+                id={field.name} 
+                className="sr-only peer" 
+                checked={!!value}
+                onChange={(e) => onFieldChange(field.name, e.target.checked)} 
+                disabled={field.disabled} />
               <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-cyan-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-600"></div>
             </label>
           </div>
         );
       case 'Textarea':
-        return <textarea rows={3} name={field.name} id={field.name} className={`${commonInputClass} ${disabledClass}`} placeholder={field.placeholder} disabled={field.disabled}></textarea>;
+        return <textarea rows={3} name={field.name} id={field.name} className={`${commonInputClass} ${disabledClass}`} placeholder={field.placeholder} disabled={field.disabled} value={value || ''} onChange={(e) => onFieldChange(field.name, e.target.value)}></textarea>;
       case 'Select':
       case 'Combobox':
         return (
           <div className="relative">
-            <select name={field.name} id={field.name} className={`${commonInputClass} ${disabledClass} appearance-none`} disabled={field.disabled}>
+            <select name={field.name} id={field.name} className={`${commonInputClass} ${disabledClass} appearance-none`} disabled={field.disabled} value={value || ''} onChange={(e) => onFieldChange(field.name, e.target.value)}>
               <option value="">{field.placeholder}</option>
               {field.options?.map(option => (
                   <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
@@ -69,9 +151,13 @@ const FormField: React.FC<FormFieldProps> = ({ field }) => {
           </div>
         );
       case 'Multi Select':
+         // Note: Controlled multi-select is complex; this is a simplified example.
         return (
           <div className="relative">
-            <select multiple name={field.name} id={field.name} className={`${commonInputClass} ${disabledClass}`} disabled={field.disabled}>
+            <select multiple name={field.name} id={field.name} className={`${commonInputClass} ${disabledClass}`} disabled={field.disabled} value={value || []} onChange={(e) => {
+              const selectedOptions = Array.from(e.target.selectedOptions, option => option.value);
+              onFieldChange(field.name, selectedOptions);
+            }}>
               {field.options?.map(option => (
                   <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
               ))}
@@ -83,7 +169,7 @@ const FormField: React.FC<FormFieldProps> = ({ field }) => {
       case 'Smart Datetime Input':
         return (
           <div className="relative">
-            <input type="text" name={field.name} id={field.name} className={`${commonInputClass} ${disabledClass} pl-10`} placeholder="Select a date" disabled={field.disabled} />
+            <input type="text" name={field.name} id={field.name} className={`${commonInputClass} ${disabledClass} pl-10`} placeholder="Select a date" disabled={field.disabled} value={value || ''} onChange={(e) => onFieldChange(field.name, e.target.value)}/>
             <CalendarIcon className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
         );
@@ -106,7 +192,7 @@ const FormField: React.FC<FormFieldProps> = ({ field }) => {
       case 'Password':
         return (
           <div className="relative">
-            <input type="password" name={field.name} id={field.name} className={`${commonInputClass} ${disabledClass} pl-10`} placeholder={field.placeholder} disabled={field.disabled} />
+            <input type="password" name={field.name} id={field.name} className={`${commonInputClass} ${disabledClass} pl-10`} placeholder={field.placeholder} disabled={field.disabled} value={value || ''} onChange={(e) => onFieldChange(field.name, e.target.value)}/>
             <LockClosedIcon className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
         );
@@ -114,12 +200,12 @@ const FormField: React.FC<FormFieldProps> = ({ field }) => {
         return (
           <div className="flex items-center mt-2 space-x-1">
             {[...Array(5)].map((_, i) => (
-              <StarIcon key={i} className="w-6 h-6 text-gray-500 cursor-pointer hover:text-yellow-400" />
+              <StarIcon key={i} className={`w-6 h-6 cursor-pointer hover:text-yellow-400 ${i < (value || 0) ? 'text-yellow-400' : 'text-gray-500'}`} onClick={() => onFieldChange(field.name, i + 1)} />
             ))}
           </div>
         );
       case 'Slider':
-        return <input type="range" name={field.name} id={field.name} className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer" disabled={field.disabled} />;
+        return <input type="range" name={field.name} id={field.name} className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-cyan-500" disabled={field.disabled} value={value || 0} onChange={(e) => onFieldChange(field.name, Number(e.target.value))} />;
       case 'Signature Input':
         return (
           <div className="w-full h-24 bg-gray-200 rounded-md mt-1 flex items-center justify-center border border-gray-400">
@@ -132,22 +218,34 @@ const FormField: React.FC<FormFieldProps> = ({ field }) => {
           <div className="mt-2 space-y-2">
               {field.options?.map(option => (
                 <div key={option.value} className="flex items-center">
-                    <input id={`${field.name}-${option.value}`} name={field.name} type="radio" value={option.value} className="focus:ring-cyan-500 h-4 w-4 text-cyan-600 border-gray-600 bg-gray-700 disabled:cursor-not-allowed" disabled={option.disabled || field.disabled}/>
+                    <input id={`${field.name}-${option.value}`} name={field.name} type="radio" value={option.value} checked={value === option.value} onChange={() => onFieldChange(field.name, option.value)} className="focus:ring-cyan-500 h-4 w-4 text-cyan-600 border-gray-600 bg-gray-700 disabled:cursor-not-allowed" disabled={option.disabled || field.disabled}/>
                     <label htmlFor={`${field.name}-${option.value}`} className={`ml-3 block text-sm font-medium ${option.disabled ? 'text-gray-500' : 'text-gray-300'}`}>{option.label}</label>
                 </div>
               ))}
           </div>
         );
       case 'CheckboxGroup':
+        const groupValue = value || {};
+        const handleCheckboxGroupChange = (optionValue: string, isChecked: boolean) => {
+            const newGroupValue = {...groupValue};
+            if(isChecked) {
+                newGroupValue[optionValue] = true;
+            } else {
+                delete newGroupValue[optionValue];
+            }
+            onFieldChange(field.name, newGroupValue);
+        };
+
         return (
             <div className={`mt-2 ${field.direction === 'horizontal' ? 'flex flex-wrap gap-x-6 gap-y-2' : 'space-y-2'}`}>
                 {field.options?.map(option => (
                   <div key={option.value} className="flex items-center">
                       <input 
                         id={`${field.name}-${option.value}`} 
-                        name={field.name} 
+                        name={`${field.name}-${option.value}`} 
                         type="checkbox" 
-                        value={option.value} 
+                        checked={!!groupValue[option.value]}
+                        onChange={(e) => handleCheckboxGroupChange(option.value, e.target.checked)}
                         className="focus:ring-cyan-500 h-4 w-4 text-cyan-600 border-gray-600 rounded bg-gray-700 disabled:cursor-not-allowed"
                         disabled={option.disabled || field.disabled}
                       />
@@ -179,29 +277,38 @@ const FormField: React.FC<FormFieldProps> = ({ field }) => {
                             className={`${commonInputClass} ${disabledClass} transition-opacity duration-300 ${isOtherChecked ? 'opacity-100' : 'opacity-50'}`}
                             placeholder="Please specify"
                             disabled={!isOtherChecked || field.disabled}
+                            onChange={(e) => onFieldChange(field.name, {...groupValue, other: e.target.value})}
                         />
                     </div>
                 )}
             </div>
         );
       default:
-        return <input type="text" name={field.name} id={field.name} className={`${commonInputClass} ${disabledClass}`} placeholder={field.placeholder} disabled={field.disabled} />;
+        return <input type="text" name={field.name} id={field.name} className={`${commonInputClass} ${disabledClass}`} placeholder={field.placeholder} disabled={field.disabled} value={value || ''} onChange={(e) => onFieldChange(field.name, e.target.value)} />;
     }
   };
 
+  const renderContainer = (children: React.ReactNode, validationMsg: string | null) => (
+    <div className="p-4 bg-gray-900/50 rounded-lg border border-gray-700/50 transition-all duration-300 animate-fade-in">
+        {children}
+        {validationMsg && <p className="mt-2 text-sm text-red-400">{validationMsg}</p>}
+    </div>
+  );
+
   if (field.variant === 'Checkbox' || field.variant === 'Switch') {
-    return <div className="p-4 bg-gray-900/50 rounded-lg border border-gray-700/50">{renderActualField()}</div>;
+    return renderContainer(renderActualField(), null); // No extra label/description needed for these types
   }
   
-  return (
-    <div className="p-4 bg-gray-900/50 rounded-lg border border-gray-700/50">
+  return renderContainer(
+    <>
       <label htmlFor={field.name} className="block text-sm font-medium text-gray-300">
         {field.label}
         {field.required && <span className="text-red-400 ml-1">*</span>}
       </label>
       <div className="mt-1">{renderActualField()}</div>
       <p className="mt-2 text-sm text-gray-400">{field.description}</p>
-    </div>
+    </>,
+    validationMessage
   );
 };
 
