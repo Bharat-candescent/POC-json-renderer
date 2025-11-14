@@ -105,7 +105,7 @@ const App: React.FC = () => {
     }
   }, [formConfig]);
 
-  const onRender = useCallback((id: string, phase: string, actualDuration: number) => {
+  const onRender = useCallback((_id: string, phase: string, actualDuration: number) => {
     if (phase === 'mount' && formConfig) {
       setReactRenderDuration(actualDuration);
     }
